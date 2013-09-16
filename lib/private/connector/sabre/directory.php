@@ -53,6 +53,7 @@ class OC_Connector_Sabre_Directory extends OC_Connector_Sabre_Node implements Sa
 		// for chunked upload also updating a existing file is a "createFile"
 		// because we create all the chunks before reasamble them to the existing file.
 		if (isset($_SERVER['HTTP_OC_CHUNKED'])) {
+<<<<<<< HEAD:lib/private/connector/sabre/directory.php
 
 			// exit if we can't create a new file and we don't updatable existing file
 			$info = OC_FileChunking::decodeName($name);
@@ -72,6 +73,42 @@ class OC_Connector_Sabre_Directory extends OC_Connector_Sabre_Node implements Sa
 		$node = new OC_Connector_Sabre_File($path);
 		return $node->put($data);
 
+=======
+			return $this->createFileChunked($name, $data);
+		}
+		$newPath = $this->path . '/' . $name;
+
+		// mark file as partial while uploading (ignored by the scanner)
+		$partpath = $newPath . '.part';
+
+		\OC\Files\Filesystem::file_put_contents($partpath, $data);
+
+		//detect aborted upload
+		if (isset ($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'PUT' ) {
+			if (isset($_SERVER['CONTENT_LENGTH'])) {
+				$expected = $_SERVER['CONTENT_LENGTH'];
+				$actual = \OC\Files\Filesystem::filesize($partpath);
+				if ($actual != $expected) {
+					\OC\Files\Filesystem::unlink($partpath);
+					throw new Sabre_DAV_Exception_BadRequest(
+							'expected filesize ' . $expected . ' got ' . $actual);
+				}
+			}
+		}
+
+		// rename to correct path
+		\OC\Files\Filesystem::rename($partpath, $newPath);
+
+		// allow sync clients to send the mtime along in a header
+		$mtime = OC_Request::hasModificationTime();
+		if ($mtime !== false) {
+			if(\OC\Files\Filesystem::touch($newPath, $mtime)) {
+				header('X-OC-MTime: accepted');
+			}
+		}
+
+		return OC_Connector_Sabre_Node::getETagPropertyForPath($newPath);
+>>>>>>> adding detection of aborted uploads:lib/connector/sabre/directory.php
 	}
 
 	/**
@@ -228,5 +265,35 @@ class OC_Connector_Sabre_Directory extends OC_Connector_Sabre_Node implements Sa
 			$props[self::GETETAG_PROPERTYNAME] = $this->getETagPropertyForPath($this->path);
 		}
 		return $props;
+	}
+
+	private function createFileChunked($name, $data)
+	{
+		$info = OC_FileChunking::decodeName($name);
+		if (empty($info)) {
+			throw new Sabre_DAV_Exception_NotImplemented();
+		}
+		$chunk_handler = new OC_FileChunking($info);
+		$bytesWritten = $chunk_handler->store($info['index'], $data);
+
+		//detect aborted upload
+		if (isset ($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'PUT' ) {
+			if (isset($_SERVER['CONTENT_LENGTH'])) {
+				$expected = $_SERVER['CONTENT_LENGTH'];
+				if ($bytesWritten != $expected) {
+					$chunk_handler->cleanup();
+					throw new Sabre_DAV_Exception_BadRequest(
+						'expected filesize ' . $expected . ' got ' . $bytesWritten);
+				}
+			}
+		}
+
+		if ($chunk_handler->isComplete()) {
+			$newPath = $this->path . '/' . $info['name'];
+			$chunk_handler->file_assemble($newPath);
+			return OC_Connector_Sabre_Node::getETagPropertyForPath($newPath);
+		}
+
+		return null;
 	}
 }
