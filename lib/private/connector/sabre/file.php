@@ -60,6 +60,7 @@ class OC_Connector_Sabre_File extends OC_Connector_Sabre_Node implements Sabre_D
 
 		// chunked handling
 		if (isset($_SERVER['HTTP_OC_CHUNKED'])) {
+<<<<<<< HEAD
 
 			list($path, $name) = \Sabre_DAV_URLUtil::splitPath($this->path);
 
@@ -77,6 +78,9 @@ class OC_Connector_Sabre_File extends OC_Connector_Sabre_Node implements Sabre_D
 			}
 
 			return null;
+=======
+			return $this->createFileChunked($data);
+>>>>>>> moving createFileChunked() to OC_Connector_Sabre_File
 		}
 
 		// mark file as partial while uploading (ignored by the scanner)
@@ -207,4 +211,37 @@ class OC_Connector_Sabre_File extends OC_Connector_Sabre_Node implements Sabre_D
 		return \OC\Files\Filesystem::getMimeType($this->path);
 
 	}
+
+	private function createFileChunked($data)
+	{
+		list($path, $name) = \Sabre_DAV_URLUtil::splitPath($this->path);
+
+		$info = OC_FileChunking::decodeName($name);
+		if (empty($info)) {
+			throw new Sabre_DAV_Exception_NotImplemented();
+		}
+		$chunk_handler = new OC_FileChunking($info);
+		$bytesWritten = $chunk_handler->store($info['index'], $data);
+
+		//detect aborted upload
+		if (isset ($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'PUT' ) {
+			if (isset($_SERVER['CONTENT_LENGTH'])) {
+				$expected = $_SERVER['CONTENT_LENGTH'];
+				if ($bytesWritten != $expected) {
+					$chunk_handler->cleanup();
+					throw new Sabre_DAV_Exception_BadRequest(
+						'expected filesize ' . $expected . ' got ' . $bytesWritten);
+				}
+			}
+		}
+
+		if ($chunk_handler->isComplete()) {
+			$newPath = $path . '/' . $info['name'];
+			$chunk_handler->file_assemble($newPath);
+			return OC_Connector_Sabre_Node::getETagPropertyForPath($newPath);
+		}
+
+		return null;
+	}
+
 }
